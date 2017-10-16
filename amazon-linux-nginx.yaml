@@ -1,0 +1,151 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates an Amazon Linux nginx Web Server based on https://github.com/widdix/learn-cloudformation/blob/master/lab0-create-stack/demo.yaml, last access 9/6/2017, on https://github.com/widdix/learn-cloudformation/blob/master/lab8-cfn-init/stub.yaml, last access 9/17/2017, and on AWS CloudFormation Sample Template LAMP_Single_Instance template
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  SSHLocation:
+    Description: ' The IP address range that can be used to SSH to the EC2 instances'
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 131.247.0.0/16
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+
+Mappings:
+  RegionAMI:
+    us-east-1:
+      AMI: ami-8c1be5f6
+    us-east-2:
+      AMI: ami-c5062ba0
+    us-west-1:
+      AMI: ami-02eada62
+    us-west-2:
+      AMI: ami-e689729e
+    ca-central-1:
+      AMI: ami-fd55ec99
+    eu-west-1:
+      AMI: ami-acd005d5
+    eu-west-2:
+      AMI: ami-1a7f6d7e
+    eu-central-1:
+      AMI: ami-c7ee5ca8
+    ap-northeast-1:
+      AMI: ami-2a69be4c
+    ap-northeast-2:
+      AMI: ami-9bec36f5
+    ap-southeast-1:
+      AMI: ami-0797ea64
+    ap-southeast-2:
+      AMI: ami-8536d6e7
+    ap-south-1:
+      AMI: ami-4fc58420
+    sa-east-1:
+      AMI: ami-f1344b9d
+
+Resources:
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          InstallAndRun:
+            - Install
+            - Configure
+        Install:
+          packages:
+            yum:
+              nginx: []
+          files:
+            "/var/www/html/index.html":
+              content: !Sub |
+               <html>
+                 <body>
+                   <h1>Koltin Hall</h1>
+                   <h2>nginx web server on amazon linux</h2>
+              mode: '000644'
+              owner: root
+              group: root
+            /etc/cfn/cfn-hup.conf:
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+                interval=1
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.EC2Instance.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2Instance --configsets InstallAndRun --region ${AWS::Region}
+                runas=root
+              mode: '000400'
+              owner: root
+              group: root                
+
+          services:
+            sysvinit:
+              nginx:
+                enabled: 'true'
+                ensureRunning: 'true'
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+
+        Configure:
+          commands:
+            # installs nginx web server
+            install_nginx_now:
+              command: |
+                sudo yum install -y nginx
+                # replaces default website directory with /var/www/html
+                sudo perl -pi -e 's@/usr/share/nginx/html@/var/www/html@s' /etc/nginx/nginx.conf
+                sudo service nginx restart
+                echo $(curl -s http://169.254.169.254/latest/meta-data/public-hostname) "|" $(curl http://169.254.169.254/latest/dynamic/instance-identity/document | grep region)"</p></body></html>" >> /var/www/html/index.html
+    Properties:
+      ImageId: !FindInMap [RegionAMI, !Ref 'AWS::Region', 'AMI']
+      InstanceType: t2.micro
+      SecurityGroups: 
+      - !Ref WebserverSecurityGroup
+      Tags:
+      - Key: Name
+        Value: Amazon Linux nginx Web Server
+      KeyName: !Ref KeyName
+      UserData:
+        'Fn::Base64': !Sub |
+          #!/bin/bash -ex
+          sudo yum -y update
+          yum update -y aws-cfn-bootstrap
+          /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource EC2Instance --configsets InstallAndRun --region ${AWS::Region}
+          # Signal the status from cfn-init (via $?)
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}
+  WebserverSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: nginx web server based on amazon linux
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 80
+        IpProtocol: tcp
+        ToPort: 80
+      - CidrIp: !Ref SSHLocation
+        FromPort: 22
+        IpProtocol: tcp
+        ToPort: 22
+
+
+Outputs:
+  PublicDNS:
+    Description: The Public DNS
+    Value: !Sub '${EC2Instance.PublicDnsName}'
+          
